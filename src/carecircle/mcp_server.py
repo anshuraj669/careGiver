@@ -6,9 +6,11 @@ import json
 import warnings
 from contextvars import ContextVar
 from typing import Annotated, Any, Literal
+from urllib.parse import urlparse
 
 from mcp.server.experimental.task_context import ServerTaskContext
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import McpError
 from mcp.types import (
     METHOD_NOT_FOUND,
@@ -100,6 +102,19 @@ class CareCircleMCP(FastMCP):
         return await experimental.run_task(work, model_immediate_response=self.task_tools[name])
 
 
+def transport_security() -> TransportSecuritySettings | None:
+    """DNS-rebinding protection for a localhost bind, also trusting PUBLIC_URL (e.g. an ngrok tunnel)."""
+    if settings.host not in ("127.0.0.1", "localhost", "::1"):
+        return None  # bound publicly (behind a load balancer): FastMCP's default, no Host check
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+    if settings.public_url:
+        public = urlparse(settings.public_url)
+        hosts.append(public.netloc)
+        origins.append(f"{public.scheme}://{public.netloc}")
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins)
+
+
 def _can_elicit(ctx: Context) -> bool:
     return ctx.session.check_client_capability(ClientCapabilities(elicitation=ElicitationCapability()))
 
@@ -113,6 +128,7 @@ def build_server(service: CareService) -> CareCircleMCP:
         icons=icon("logo", TEAL),
         token_verifier=JwtTokenVerifier(settings) if auth else None,
         auth=auth,
+        transport_security=transport_security(),
         host=settings.host,
         port=settings.port,
         streamable_http_path="/mcp",

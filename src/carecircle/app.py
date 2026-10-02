@@ -1,8 +1,9 @@
-"""HTTP entry point: the MCP endpoint at /mcp, the voice simulator at /voice, and a health check."""
+"""HTTP entry point: MCP at /mcp, voice simulator at /voice, caregiver dashboard at /dashboard."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import logging
 
@@ -11,7 +12,9 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
+from . import scheduler
 from .config import settings
+from .dashboard import dashboard_routes
 from .mcp_server import build_server
 from .seed import seed
 from .service import CareService
@@ -39,13 +42,15 @@ def create_app(service: CareService | None = None, voice: VoiceSessions | None =
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
+        checks = asyncio.create_task(scheduler.run_forever(service))
         async with mcp.session_manager.run():
             try:
                 yield
             finally:
+                checks.cancel()
                 await voice.close_all()
 
-    routes = [Route("/health", health), *voice_routes(voice), Mount("/", app=mcp_app)]
+    routes = [Route("/health", health), *voice_routes(voice), *dashboard_routes(service), Mount("/", app=mcp_app)]
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.service = service
     app.state.mcp = mcp
@@ -55,6 +60,7 @@ def create_app(service: CareService | None = None, voice: VoiceSessions | None =
 def main() -> None:
     parser = argparse.ArgumentParser(description="CareCircle MCP server")
     parser.add_argument("--seed", action="store_true", help="reset the store to the demo household and exit")
+    parser.add_argument("--check", action="store_true", help="run the proactive checks once and exit (for a cron/EventBridge trigger)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -62,7 +68,12 @@ def main() -> None:
         seed(make_store())
         print("Seeded demo household.")
         return
+    if args.check:
+        raised = asyncio.run(scheduler.check_once(CareService(make_store())))
+        print(f"Checks done: {raised} new alert(s).")
+        return
     log.info("Voice simulator: http://127.0.0.1:%s/voice", settings.port)
+    log.info("Caregiver dashboard: http://127.0.0.1:%s/dashboard", settings.port)
     uvicorn.run(create_app(), host=settings.host, port=settings.port)
 
 

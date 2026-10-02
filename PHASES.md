@@ -8,9 +8,9 @@ depend on earlier ones.
 |---|---|---|
 | 1 | Core MCP server | ✅ Done |
 | 2 | Advanced MCP spec features (Tasks, elicitation, icons, OAuth 2.1) | ✅ Done |
-| 3 | Alexa+-style voice simulator | ⬜ Next |
-| 4 | Caregiver dashboard and proactive scheduler | ⬜ |
-| 5 | AWS deployment | ⬜ |
+| 3 | Alexa+-style voice simulator | ✅ Done |
+| 4 | Caregiver dashboard and proactive scheduler | ✅ Done |
+| 5 | AWS deployment | ⬜ Next |
 | 6 | Demo polish and submission | ⬜ |
 
 ---
@@ -86,7 +86,7 @@ rejection of a request without a token. The Inspector shows the icons and runs t
 
 ---
 
-## Phase 3: Alexa+-style voice simulator
+## Phase 3: Alexa+-style voice simulator ✅
 
 **Goal:** let judges hear and see the real experience without an Alexa device.
 
@@ -97,6 +97,9 @@ rejection of a request without a token. The Inspector shows the icons and runs t
   connects to `/mcp` as an MCP client, using the simulator bearer token when OAuth is on.
 - Visible tool calls in the UI, so viewers can see which MCP tool each spoken request triggered.
 - Scripted scenario buttons: "Did I take my pills?", a scam phone call, "I feel dizzy", and a refill request.
+- Spoken confirmations: the server's elicitation ("Send this to Priya?") is read aloud and the next
+  answer ("yes" / "no") is sent back. Task results (refills) are announced when they finish.
+- Offline mode: with `LLM_PROVIDER=none`, a keyword router picks the tool, so the demo needs no credentials.
 
 **Exit check:** each scenario works end to end by voice in Chrome, and the same flows work typed
 when there is no microphone.
@@ -106,7 +109,7 @@ when there is no microphone.
 
 ---
 
-## Phase 4: Caregiver dashboard and proactive scheduler
+## Phase 4: Caregiver dashboard and proactive scheduler ✅
 
 **Goal:** close the loop for the family caregiver, and make CareCircle act on its own instead of
 only when someone asks.
@@ -121,6 +124,9 @@ only when someone asks.
 - **SMS delivery** through Amazon SNS (`notify.py`), either a topic or a direct number. With no
   settings it only logs.
 - De-duplicated alerts, so one missed dose doesn't cause repeated texts.
+- `carecircle --check` runs the checks once, so EventBridge can drive them in Phase 5 (set
+  `SCHEDULER_INTERVAL_S=0` when running more than one instance).
+- With OAuth on, the dashboard needs `DASHBOARD_KEY`, because it shows health data.
 
 **Exit check:** move the clock forward in a test and see the missed-dose alert fire exactly once.
 The dashboard reflects doses logged from the voice simulator.

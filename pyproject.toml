@@ -3,6 +3,8 @@ name = "carecircle"
 version = "0.1.0"
 description = "CareCircle: a voice-first eldercare companion exposed as an MCP server (spec 2025-11-25) for Alexa+"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "anthropic[bedrock]>=1.9.0",

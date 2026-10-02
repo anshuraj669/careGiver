@@ -46,6 +46,7 @@ MILD = {"lonely": "feeling lonely", "sad": "feeling sad", "headache": "headache"
 DUE_WINDOW = timedelta(minutes=30)  # a dose counts as "due" from 30 min before its time
 MATCH_WINDOW = timedelta(hours=4)  # a logged dose satisfies a slot within 4 hours of it
 DELIVERY_TIME = timedelta(hours=3)
+AWAKE = ("08:00", "21:00")  # inactivity is only worth a text during waking hours
 OPEN_REFILL = {"requested", "contacting_pharmacy", "verifying", "approved"}
 
 
@@ -397,6 +398,80 @@ class CareService:
         else:
             msg = "Thanks for telling me. I've noted it. Would you like me to call someone or play something cheerful?"
         return CheckInResult(recorded=True, concerns=concerns, caregiver_alerted=alerted, message=msg)
+
+    # ---------- proactive checks (scheduler) ----------
+
+    async def run_checks(self) -> list[Alert]:
+        """Missed doses, inactivity and low stock. Safe to run often: every alert is de-duplicated."""
+        current = now()
+        date = current.date().isoformat()
+        p = self.profile()
+        seen = {a.dedupe_key for a in self.alerts()}
+        raised: list[Alert] = []
+
+        async def alert(*args, dedupe_key: str, **kwargs) -> None:
+            if dedupe_key not in seen:
+                seen.add(dedupe_key)
+                raised.append(await self.raise_alert(*args, dedupe_key=dedupe_key, **kwargs))
+
+        logs = self._logs_for(date)
+        for m in self.medications():
+            for t in m.times:
+                if (m.id, t) not in logs and current > _at(current, t) + timedelta(minutes=settings.missed_dose_grace_min):
+                    await alert(
+                        "warning", "missed_dose", f"{p.preferred_name} missed the {spoken_time(t)} {m.name}",
+                        f"{m.name} {m.dose} was due at {spoken_time(t)} and hasn't been logged.",
+                        dedupe_key=f"missed:{date}:{m.id}:{t}",
+                    )
+            open_refill = any(r.medication_id == m.id and r.status in OPEN_REFILL for r in self.refills())
+            if m.pills_remaining <= settings.low_stock_threshold and not open_refill:
+                await alert(
+                    "info", "low_stock", f"{m.name} is running low",
+                    f"{m.pills_remaining} pills left. Remind {p.preferred_name} to order a refill.",
+                    dedupe_key=f"low:{date}:{m.id}",
+                )
+
+        if p.last_activity and AWAKE[0] <= current.strftime("%H:%M") <= AWAKE[1]:
+            idle = current - datetime.fromisoformat(p.last_activity)
+            if idle >= timedelta(hours=settings.inactivity_hours):
+                hours = int(idle.total_seconds() // 3600)
+                await alert(
+                    "warning", "inactivity", f"No activity from {p.preferred_name} in {hours} hours",
+                    f"Last interaction at {_spoken_dt(p.last_activity)}. Consider giving {p.preferred_name} a call.",
+                    dedupe_key=f"inactivity:{p.last_activity}",  # once per quiet spell
+                )
+        return raised
+
+    # ---------- dashboard ----------
+
+    def checkins(self, days: int = 14) -> list[CheckIn]:
+        cutoff = (now() - timedelta(days=days)).isoformat()
+        return sorted((c for c in self.store.load_all("checkin", CheckIn) if c.at >= cutoff), key=lambda c: c.at)
+
+    def dashboard(self) -> dict:
+        p = self.profile()
+        by_day = self.adherence(7)
+        scheduled = sum(d.scheduled for d in by_day)
+        taken = sum(d.taken for d in by_day)
+        today = self.schedule()
+        return {
+            "generated_at": now().isoformat(),
+            "profile": p.model_dump(),
+            "adherence": {
+                "pct": round(100 * taken / scheduled, 1) if scheduled else None,
+                "taken": taken, "scheduled": scheduled,
+                "by_day": [d.model_dump() for d in by_day],
+            },
+            "today": today.model_dump(),
+            "alerts": [a.model_dump() for a in self.alerts()[:30]],
+            "open_alerts": sum(not a.acknowledged for a in self.alerts()),
+            "checkins": [c.model_dump() for c in self.checkins(14)],
+            "medications": [
+                {**m.model_dump(), "low_stock": m.pills_remaining <= settings.low_stock_threshold}
+                for m in self.medications()
+            ],
+            "refills": [r.model_dump() for r in self.refills()[:5]],
+        }
 
     # ---------- summaries ----------
 

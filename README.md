@@ -9,6 +9,8 @@ and keeps the family caregiver informed.
 ```bash
 uv sync
 uv run carecircle                         # MCP endpoint at http://127.0.0.1:8000/mcp
+                                          # voice simulator at http://127.0.0.1:8000/voice
+                                          # caregiver dashboard at http://127.0.0.1:8000/dashboard
 uv run python scripts/demo_client.py      # in another terminal: walk through demo scenarios
 uv run pytest                             # unit + end-to-end MCP tests
 ```
@@ -51,6 +53,56 @@ Every tool has annotations, a title, an icon and an `outputSchema`, and returns 
   publishes `/.well-known/oauth-protected-resource/mcp` and answers 401 with a `WWW-Authenticate`
   challenge. It checks signature, expiry, issuer, audience and scopes.
 
+## Voice simulator
+
+Open `/voice` in Chrome or Edge to talk to CareCircle the way you would to Alexa+: tap the mic
+(Web Speech API for speech-to-text and text-to-speech) or type. Each reply shows the MCP tool calls
+behind it. Scenario buttons cover the demo flows.
+
+- **Brain:** with `LLM_PROVIDER=bedrock` or `anthropic`, Claude runs a tool-use loop over the tools
+  it discovers from `/mcp`. With `LLM_PROVIDER=none`, a keyword router picks one tool per utterance,
+  so the demo works offline.
+- **Real MCP client:** every conversation opens its own Streamable HTTP session to `/mcp`, using
+  `SERVICE_TOKEN` when OAuth is on.
+- **Elicitation by voice:** "Tell Priya…" makes the server ask "Send this to Priya?". The question is
+  spoken, and your next answer ("yes" / "no") goes back as the elicitation response.
+- **Tasks by voice:** a refill runs as an MCP task. The page announces the result when it finishes,
+  and Claude hears about it on the next turn.
+- **Access:** open when OAuth is off. With OAuth on it needs `SERVICE_TOKEN` and `SIMULATOR_KEY`
+  (`/voice?key=...`), otherwise it is switched off.
+
+### Testing with an external Alexa+ simulator
+
+Community simulators such as [mcp-voice-simulator](https://github.com/AlSayedGamal/alexa-ai-web-simulator)
+act as Alexa+'s MCP client. To reach CareCircle from another machine or a hosted tool, open a tunnel
+and set `PUBLIC_URL` to it. Hosts not in `PUBLIC_URL` are refused (421) by DNS-rebinding protection.
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8000        # or: ngrok http 8000
+PUBLIC_URL=https://<tunnel-host> uv run carecircle    # MCP URL: https://<tunnel-host>/mcp
+```
+
+To skip account linking while OAuth is on, give the simulator `SERVICE_TOKEN` as its bearer token
+(`MCP_BEARER_TOKEN` in mcp-voice-simulator).
+
+## Caregiver dashboard and proactive checks
+
+`/dashboard` is the family caregiver's view: 7-day adherence, today's doses, alerts (with
+acknowledge), mood at check-in, medications with low-stock warnings and pharmacy refills. It
+refreshes every 15 seconds, so doses logged by voice show up on their own.
+
+A scheduler inside the server runs every `SCHEDULER_INTERVAL_S` seconds:
+
+| Check | Alert | Texted |
+|---|---|---|
+| Dose not logged `MISSED_DOSE_GRACE_MIN` after its time | warning | yes |
+| No interaction for `INACTIVITY_HOURS` (08:00-21:00 only) | warning | yes |
+| `LOW_STOCK_THRESHOLD` pills or fewer, no refill underway | info | no |
+
+Every alert carries a de-duplication key, so a missed dose texts the caregiver once, however
+often the checks run. `uv run carecircle --check` runs them once, for cron or EventBridge.
+With OAuth on, the dashboard needs `DASHBOARD_KEY` (`/dashboard?key=...`).
+
 ## Configuration
 
 See `.env.example`. Everything runs offline with `LLM_PROVIDER=none` (rule-based scam detection
@@ -64,6 +116,11 @@ src/carecircle/
   mcp_server.py   MCP tools, resources, prompts, task-augmented tool calls
   auth.py         OAuth 2.1 resource server: JWT verification against Cognito
   icons.py        SVG icons for tools, resources and prompts
+  voice.py        voice agent: Claude tool-use loop over MCP, offline router, spoken elicitation
+  web.py          voice simulator routes (/voice, /api/voice/...)
+  dashboard.py    caregiver dashboard routes (/dashboard, /api/dashboard, ...)
+  scheduler.py    proactive checks on a timer (missed doses, inactivity, low stock)
+  static/         simulator and dashboard pages
   service.py      care logic (schedule, dose guard, alerts, check-ins, summaries)
   scam.py         fraud red-flag rules + optional Claude refinement
   store.py        JSON-file or DynamoDB document store
@@ -78,7 +135,11 @@ Details and the AWS services per phase are in [PHASES.md](PHASES.md).
 
 - [x] **Phase 1:** core MCP server, tools, resources and prompts, tests
 - [x] **Phase 2:** Tasks (async pharmacy refill), elicitation (confirm before messaging family), icons, OAuth 2.1
-- [ ] **Phase 3:** Alexa+-style voice simulator web app with a Claude agent
-- [ ] **Phase 4:** caregiver dashboard, missed-dose and inactivity scheduler, SNS SMS
+- [x] **Phase 3:** Alexa+-style voice simulator web app with a Claude agent
+- [x] **Phase 4:** caregiver dashboard, missed-dose and inactivity scheduler, SNS SMS
 - [ ] **Phase 5:** AWS deployment (DynamoDB, Docker, CDK)
 - [ ] **Phase 6:** demo polish (architecture diagram, spec-compliance table, demo script)
+
+## License
+
+[MIT](LICENSE)

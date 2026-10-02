@@ -58,6 +58,8 @@ class Settings:
     service_token: str = field(default_factory=lambda: _env("SERVICE_TOKEN"))
     # Access key for the voice simulator page when OAuth is on (open /voice?key=...).
     simulator_key: str = field(default_factory=lambda: _env("SIMULATOR_KEY"))
+    # Access key for the caregiver dashboard when OAuth is on (open /dashboard?key=...).
+    dashboard_key: str = field(default_factory=lambda: _env("DASHBOARD_KEY"))
 
     # Care rules
     missed_dose_grace_min: int = field(default_factory=lambda: int(_env("MISSED_DOSE_GRACE_MIN", "60")))

@@ -14,7 +14,7 @@ from mcp.types import CallToolResult, ElicitResult
 from carecircle.auth import SERVICE_CLIENT_ID, JwtTokenVerifier
 from carecircle.config import Settings
 
-from .conftest import SERVICE_TOKEN
+from .conftest import SERVICE_TOKEN, _run_server
 
 # ---------- tasks ----------
 
@@ -190,3 +190,21 @@ async def test_service_token_verifier():
     token = await verifier.verify_token("s3cret")
     assert token.client_id == SERVICE_CLIENT_ID
     assert token.scopes == ["carecircle/mcp"]
+
+
+# ---------- tunnels ----------
+
+
+def test_public_url_host_is_allowed(tmp_path):
+    proc, base = _run_server(tmp_path, PUBLIC_URL="https://carecircle-demo.trycloudflare.com")
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}
+    headers = {"Accept": "application/json, text/event-stream"}
+    try:
+        tunnel = httpx.post(f"{base}/mcp", json=init, headers={**headers, "Host": "carecircle-demo.trycloudflare.com"})
+        other = httpx.post(f"{base}/mcp", json=init, headers={**headers, "Host": "evil.example"})
+        assert tunnel.status_code == 200
+        assert other.status_code == 421  # DNS-rebinding protection still on for anything else
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
